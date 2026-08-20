@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zeitleiste — Lifetimes</title>
+<style>
+  :root{
+    --ink:#111;
+    --paper:#fff;
+    --faint:#e6e6e6;
+    --mid:#999;
+    --bar-h:22px;
+    --row-h:30px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--paper);color:var(--ink);
+    font-family:Georgia,'Times New Roman',serif;font-size:15px;
+    height:100%;overflow:hidden}
+  #chrome{padding:0}
+  header{padding:18px 32px 6px}
+  h1{font-size:22px;font-weight:normal;letter-spacing:.02em}
+  h1 .sub{color:var(--mid);font-size:14px;margin-left:10px}
+  /* ---------- controls ---------- */
+  #controls{
+    padding:12px 32px 12px;border-bottom:1px solid var(--ink);
+    display:flex;flex-wrap:wrap;gap:18px;align-items:flex-end;
+    font-family:Helvetica,Arial,sans-serif;font-size:12.5px}
+  .ctl-group{display:flex;flex-direction:column;gap:6px}
+  .ctl-label{text-transform:uppercase;letter-spacing:.08em;font-size:10px;color:var(--mid)}
+  .cats{display:flex;flex-wrap:wrap;gap:4px}
+  .cat-btn{
+    border:1px solid var(--ink);background:var(--paper);color:var(--ink);
+    padding:4px 10px;cursor:pointer;font:inherit;user-select:none}
+  .cat-btn.on{background:var(--ink);color:var(--paper)}
+  .cat-btn:focus-visible,select:focus-visible,.preset:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+  select{
+    border:1px solid var(--ink);background:var(--paper);color:var(--ink);
+    padding:4px 6px;font:inherit;max-width:230px}
+  .preset{
+    border:1px solid var(--ink);background:var(--paper);padding:4px 10px;
+    cursor:pointer;font:inherit}
+  .preset.on{background:var(--ink);color:var(--paper)}
+  #count{color:var(--mid);margin-left:auto;align-self:center}
+  /* ---------- scrolling timeline ---------- */
+  /* #scroller owns BOTH scrollbars. The axis is sticky to its top edge:
+     locked vertically, travels horizontally with the rows. */
+  #scroller{overflow:auto;position:relative}
+  #inner{position:relative;min-width:100%}
+  #axis{
+    position:sticky;top:0;z-index:5;height:34px;background:var(--paper);
+    border-bottom:1px solid var(--faint);
+    font-family:Helvetica,Arial,sans-serif;font-size:10.5px;color:var(--mid)}
+  .tick{position:absolute;top:0;height:100%;border-left:1px solid var(--faint)}
+  .tick span{position:absolute;top:8px;left:4px;white-space:nowrap}
+  .tick.major{border-left-color:var(--mid)}
+  #rows{position:relative;padding-bottom:40px}
+  .gridline{position:absolute;top:0;bottom:0;border-left:1px solid var(--faint);z-index:0}
+  .gridline.major{border-left-color:#ccc}
+  .row{position:relative;height:var(--row-h);z-index:1}
+  .row:hover{background:#f5f5f5}
+  .bar{
+    position:absolute;top:calc((var(--row-h) - var(--bar-h))/2);height:var(--bar-h);
+    background:var(--ink);display:flex;align-items:center;white-space:nowrap}
+  .bar.living{border-right:3px double var(--paper)}
+  .name{
+    color:var(--paper);font-size:12px;line-height:1;white-space:nowrap;
+    pointer-events:none;padding:0 8px}
+  .name .yrs{color:#bbb;font-size:10.5px;margin-left:6px;font-family:Helvetica,Arial,sans-serif}
+  /* ref-person highlight in overlap mode */
+  .row.ref .bar{outline:1.5px solid var(--ink);outline-offset:2.5px}
+  /* ---------- broad overview (era) mode ---------- */
+  /* vertical order: dot → emblem text → era bar */
+  #eras{position:relative;height:150px;margin-top:26px}
+  .dot{
+    position:absolute;top:4px;width:12px;height:12px;border-radius:50%;
+    background:var(--ink);transform:translateX(-50%);z-index:2}
+  .emblem{
+    position:absolute;top:22px;transform:translateX(-50%);text-align:center;
+    font-size:12.5px;white-space:nowrap;z-index:2}
+  .emblem .yrs2{display:block;color:var(--mid);font-size:10.5px;
+    font-family:Helvetica,Arial,sans-serif;margin-top:2px}
+  .era{
+    position:absolute;top:68px;height:46px;background:#d9d9d9;
+    border-left:1px solid var(--paper);display:flex;align-items:center;justify-content:center}
+  .era .era-name{
+    font-family:Helvetica,Arial,sans-serif;font-size:11px;letter-spacing:.05em;
+    color:#444;text-transform:uppercase;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;padding:0 6px;text-align:center}
+  .era .era-name .range{display:block;font-size:10px;letter-spacing:0;
+    text-transform:none;color:#777;margin-top:2px}
+  /* arrow terminal: era continues beyond the left edge into deep time */
+  .era.arrow{border-left:none;margin-left:14px}
+  .era.arrow::before{
+    content:"";position:absolute;left:-14px;top:0;
+    border-top:23px solid transparent;border-bottom:23px solid transparent;
+    border-right:14px solid #d9d9d9}
+  /* ---------- tooltip ---------- */
+  #tip{
+    position:fixed;z-index:20;background:var(--ink);color:var(--paper);
+    font-family:Helvetica,Arial,sans-serif;font-size:12px;line-height:1.5;
+    padding:8px 11px;max-width:260px;pointer-events:none;display:none}
+  #tip b{font-size:13px}
+  #tip .dim{color:#bbb}
+  #empty{padding:60px 0;color:var(--mid);text-align:center;font-style:italic;display:none}
+  @media (max-width:700px){
+    header,#controls{padding-left:14px;padding-right:14px}
+  }
+</style>
+</head>
+<body>
+<div id="chrome">
+<header>
+  <h1>Zeitleiste<span class="sub">lifetimes, filterable — prototype (monochrome)</span></h1>
+</header>
+
+<div id="controls">
+  <div class="ctl-group">
+    <span class="ctl-label">Preset</span>
+    <div class="cats">
+      <button class="preset on" id="btn-gnh">Goethe · Nietzsche · Hesse</button>
+      <button class="preset" id="btn-all">All people</button>
+      <button class="preset" id="btn-ov">Broad overview</button>
+    </div>
+  </div>
+  <div class="ctl-group">
+    <span class="ctl-label">Labels</span>
+    <div class="cats" id="catBtns"></div>
+  </div>
+  <div class="ctl-group">
+    <span class="ctl-label">Lived at the same time as</span>
+    <select id="overlapSel"><option value="">— anyone —</option></select>
+  </div>
+  <span id="count"></span>
+</div>
+</div><!-- /chrome -->
+
+<div id="scroller">
+  <div id="inner">
+    <div id="axis"></div>
+    <div id="rows"></div>
+    <div id="empty">No one matches the current filters.</div>
+  </div>
+</div>
+
+<div id="tip"></div>
+
+<script>
+/* ============ DATA ============ */
+/* d: 0 = living. Categories: LPT, MUS, POL, SCI, ART, ARC */
+const CAT_NAMES = {
+  LPT:"Literature, Philosophy, Theory", MUS:"Music", POL:"Politics",
+  SCI:"Science and Technology", ART:"Visual Arts", ARC:"Architects"
+};
+const P = [
+ ["Claudio Monteverdi",1567,1643,["MUS"],"Cremona, Mantua, Venice"],
+ ["Heinrich Schütz",1585,1672,["MUS"],"Dresden, Venice"],
+ ["René Descartes",1596,1650,["LPT"],"Netherlands, Stockholm"],
+ ["Baruch Spinoza",1632,1677,["LPT"],"Amsterdam, The Hague"],
+ ["G. W. Leibniz",1646,1716,["LPT","SCI"],"Leipzig, Hanover"],
+ ["Andreas Schlüter",1659,1714,["ARC"],"Danzig, Berlin"],
+ ["J. F. Eosander",1669,1728,["ARC"],"Berlin, Stockholm"],
+ ["G. P. Telemann",1681,1767,["MUS"],"Magdeburg, Hamburg"],
+ ["G. F. Handel",1685,1759,["MUS"],"Halle, London"],
+ ["J. S. Bach",1685,1750,["MUS"],"Eisenach, Weimar/Jena, Köthen, Leipzig"],
+ ["G. W. von Knobelsdorff",1699,1753,["ARC"],"Kuckädel, Berlin, Potsdam"],
+ ["Friedrich der Große",1712,1786,["POL"],"Berlin, Potsdam"],
+ ["J. J. Winckelmann",1717,1768,["LPT"],"Stendal, Rome"],
+ ["Immanuel Kant",1724,1804,["LPT"],"Königsberg"],
+ ["Carl Gotthard Langhans",1732,1808,["ARC"],"Landeshut, Berlin"],
+ ["Joseph Haydn",1732,1809,["MUS"],"Rohrau, Eisenstadt, Vienna"],
+ ["Anton Graff",1736,1813,["ART"],"Winterthur, Dresden"],
+ ["J. G. Herder",1744,1803,["LPT"],"Riga, Weimar/Jena"],
+ ["J. W. von Goethe",1749,1832,["LPT","SCI"],"Frankfurt, Leipzig, Weimar/Jena, Italy"],
+ ["J. H. W. Tischbein",1751,1829,["ART"],"Haina, Kassel, Rome, Naples"],
+ ["W. A. Mozart",1756,1791,["MUS"],"Salzburg, Vienna"],
+ ["Friedrich Schiller",1759,1805,["LPT"],"Marbach, Weimar/Jena"],
+ ["Napoleon Bonaparte",1769,1821,["POL"],"Ajaccio, Paris, Elba, St. Helena"],
+ ["Alexander von Humboldt",1769,1859,["SCI"],"Berlin, Latin America, Paris"],
+ ["G. W. F. Hegel",1770,1831,["LPT"],"Stuttgart, Weimar/Jena, Berlin"],
+ ["Ludwig van Beethoven",1770,1827,["MUS"],"Bonn, Vienna"],
+ ["Klemens von Metternich",1773,1859,["POL"],"Koblenz, Vienna"],
+ ["Caspar David Friedrich",1774,1840,["ART"],"Greifswald, Dresden"],
+ ["Philipp Otto Runge",1777,1810,["ART"],"Wolgast, Hamburg, Dresden"],
+ ["Carl Friedrich Gauss",1777,1855,["SCI"],"Braunschweig, Göttingen"],
+ ["Karl Friedrich Schinkel",1781,1841,["ARC"],"Neuruppin, Berlin"],
+ ["Leo von Klenze",1784,1864,["ARC"],"Bockenem, Munich"],
+ ["Arthur Schopenhauer",1788,1860,["LPT"],"Danzig, Frankfurt"],
+ ["Franz Schubert",1797,1828,["MUS"],"Vienna"],
+ ["Heinrich Heine",1797,1856,["LPT"],"Düsseldorf, Paris"],
+ ["Friedrich August Stüler",1800,1865,["ARC"],"Berlin, Potsdam"],
+ ["Ernst Friedrich Zwirner",1802,1861,["ARC"],"Jakobswalde, Cologne"],
+ ["Felix Mendelssohn",1809,1847,["MUS"],"Hamburg, Berlin, Leipzig"],
+ ["Frédéric Chopin",1810,1849,["MUS"],"Warsaw, Paris"],
+ ["Robert Schumann",1810,1856,["MUS"],"Zwickau, Leipzig, Düsseldorf"],
+ ["Franz Liszt",1811,1886,["MUS"],"Raiding, Weimar/Jena, Rome, Budapest"],
+ ["Richard Wagner",1813,1883,["MUS"],"Leipzig, Dresden, Munich, Bayreuth"],
+ ["Eduard Riedel",1813,1885,["ARC"],"Munich"],
+ ["Otto von Bismarck",1815,1898,["POL"],"Schönhausen, Berlin"],
+ ["Karl Marx",1818,1883,["LPT"],"Trier, Berlin, Paris, London"],
+ ["Johann Strauss II",1825,1899,["MUS"],"Vienna"],
+ ["Ernst Mach",1838,1916,["SCI","LPT"],"Vienna, Prague"],
+ ["Imre Steindl",1839,1902,["ARC"],"Pest, Budapest"],
+ ["Otto Brückwald",1841,1917,["ARC"],"Leipzig, Bayreuth"],
+ ["Paul Wallot",1841,1912,["ARC"],"Oppenheim, Berlin"],
+ ["Robert Koch",1843,1910,["SCI"],"Clausthal, Berlin"],
+ ["Friedrich Nietzsche",1844,1900,["LPT"],"Röcken, Basel, Sils-Maria, Turin"],
+ ["Wilhelm Röntgen",1845,1923,["SCI"],"Lennep, Würzburg"],
+ ["Sigmund Freud",1856,1939,["LPT"],"Freiberg, Vienna, London"],
+ ["Max Planck",1858,1947,["SCI"],"Kiel, Berlin"],
+ ["Kaiser Wilhelm II",1859,1941,["POL"],"Berlin, Potsdam, Doorn"],
+ ["Edvard Munch",1863,1944,["ART"],"Oslo, Berlin, Paris"],
+ ["Richard Strauss",1864,1949,["MUS"],"Munich, Garmisch, Vienna"],
+ ["Wassily Kandinsky",1866,1944,["ART"],"Moscow, Munich, Bauhaus, Paris"],
+ ["Käthe Kollwitz",1867,1945,["ART"],"Königsberg, Berlin"],
+ ["Giacomo Balla",1871,1958,["ART"],"Turin, Rome"],
+ ["Carl Jung",1875,1961,["LPT"],"Kesswil, Zürich"],
+ ["Rainer Maria Rilke",1875,1926,["LPT"],"Prague, Paris, Muzot"],
+ ["Hermann Hesse",1877,1962,["LPT"],"Calw, Montagnola"],
+ ["Albert Einstein",1879,1955,["SCI"],"Ulm, Bern, Berlin, Princeton"],
+ ["Béla Bartók",1881,1945,["MUS"],"Nagyszentmiklós, Budapest, New York"],
+ ["Walter Gropius",1883,1969,["ARC"],"Berlin, Weimar, Dessau"],
+ ["Erich Mendelsohn",1887,1953,["ARC"],"Allenstein, Berlin"],
+ ["Erwin Schrödinger",1887,1961,["SCI"],"Vienna, Berlin, Dublin"],
+ ["Adolf Hitler",1889,1945,["POL"],"Braunau am Inn, Vienna, Munich, Berlin"],
+ ["Martin Heidegger",1889,1976,["LPT"],"Meßkirch, Freiburg"],
+ ["George Grosz",1893,1959,["ART"],"Berlin, New York"],
+ ["Ernst Jünger",1895,1998,["LPT"],"Leipzig, Berlin, Heidelberg, Wilflingen"],
+ ["Carl Orff",1895,1982,["MUS"],"Munich"],
+ ["Arno Breker",1900,1991,["ART"],"Elberfeld, Paris, Berlin"],
+ ["Werner Heisenberg",1901,1976,["SCI"],"Würzburg, Munich, Leipzig, Berlin"],
+ ["Hermann Henselmann",1905,1995,["ARC"],"Roßla, Berlin"],
+ ["Albert Speer",1905,1981,["ARC"],"Mannheim, Berlin"],
+ ["Albert Hofmann",1906,2008,["SCI"],"Baden (Switzerland), Basel"],
+ ["Wernher von Braun",1912,1977,["SCI"],"Wirsitz, Peenemünde, Huntsville"],
+ ["Helmut Schmidt",1918,2015,["POL"],"Hamburg, Bonn"],
+ ["György Ligeti",1923,2006,["MUS"],"Târnăveni, Budapest, Vienna"],
+ ["Karlheinz Stockhausen",1928,2007,["MUS"],"Mödrath, Cologne, Kürten"],
+ ["David Bowie",1947,2016,["MUS"],"London, Berlin, New York"],
+ ["Peter Sloterdijk",1947,0,["LPT"],"Karlsruhe"],
+ ["Angela Merkel",1954,0,["POL"],"Hamburg, Templin, Berlin"],
+ ["Neo Rauch",1960,0,["ART"],"Leipzig"],
+ ["Jonas Kaufmann",1969,0,["MUS"],"Munich, Vienna"],
+ ["Diana Damrau",1971,0,["MUS"],"Günzburg, Munich"]
+].map((r,i)=>({id:i,name:r[0],b:r[1],d:r[2],cats:r[3],places:r[4]}));
+
+const THIS_YEAR = new Date().getFullYear();
+const endYear = p => p.d === 0 ? THIS_YEAR : p.d;
+const GNH = ["J. W. von Goethe","Friedrich Nietzsche","Hermann Hesse"];
+
+/* ---- broad-overview eras (negative year = BC) ---- */
+const ERAS = [
+ {from:-300000, to:-3200, name:"Prehistory", arrow:true,
+  emblem:{name:"Language", yrs:"c. 100,000\u201350,000 years ago", mid:-70000,
+          note:"Dating deeply debated. Beyond the arrow: control of fire (c. 1 million years ago), first stone tools (c. 3.3 million years ago)"}},
+ {from:-3200, to:-1450, name:"Minoans",
+  emblem:{name:"Minoan civilization", yrs:"c. 3100\u20131450 BC", mid:-1900,
+          note:"Palatial Crete \u2014 Knossos; pre-Greek Aegean high culture"}},
+ {from:-1450, to:-800, name:"Eleusis",
+  emblem:{name:"Eleusis", yrs:"Mycenaean origins, c. 15th c. BC", mid:-1200,
+          note:"The Mysteries \u2014 the ritual, pre-philosophical stratum of Geist"}},
+ {from:-800, to:0, name:"Empedocles",
+  emblem:{name:"Empedocles", yrs:"c. 494\u2013434 BC", mid:-464,
+          note:"Akragas, Sicily; the four elements; H\u00f6lderlin's and Nietzsche's Empedocles"}},
+ {from:0, to:500, name:"Ulfilas",
+  emblem:{name:"Ulfilas", yrs:"c. 311\u2013383", mid:347,
+          note:"Bishop of the Goths; the Gothic Bible \u2014 first Germanic literary language"}},
+ {from:500, to:1000, name:"Charlemagne",
+  emblem:{name:"Charlemagne", yrs:"c. 748\u2013814", mid:781,
+          note:"Crowned 800, Aachen; the Carolingian Renaissance"}},
+ {from:1000, to:1596, name:"Friedrich II",
+  emblem:{name:"Friedrich II \u201cStupor Mundi\u201d", yrs:"1194\u20131250", mid:1222,
+          note:"Hohenstaufen emperor; Sicily; falconry, skepticism, the medieval synthesis cracking"}},
+ {from:1596, to:THIS_YEAR, name:"Descartes \u2192 now",
+  emblem:{name:"Ludwig van Beethoven", yrs:"1770\u20131827", mid:1798,
+          note:"Born 1770, alongside Hegel and H\u00f6lderlin"}}
+];
+/* year label formatter */
+function fmtYear(y){
+  if(y < 0) return Math.abs(y).toLocaleString("en-US") + " BC";
+  return "" + y;
+}
+
+/* ---- label width measurement (canvas, same fonts as CSS) ---- */
+const mctx = document.createElement("canvas").getContext("2d");
+function labelWidth(p){
+  mctx.font = "12px Georgia";
+  const wName = mctx.measureText(p.name).width;
+  mctx.font = "10.5px Helvetica, Arial, sans-serif";
+  const yrs = p.b + "\u2013" + (p.d===0 ? "" : p.d);
+  const wYrs = mctx.measureText(yrs).width;
+  return 8 + wName + 6 + wYrs + 8;   /* padding + gap + padding */
+}
+
+/* ============ STATE ============ */
+const state = {
+  preset: "gnh",
+  cats: new Set(),
+  overlapRef: null
+};
+
+/* ============ CONTROLS ============ */
+const catBtnsEl = document.getElementById("catBtns");
+Object.entries(CAT_NAMES).forEach(([code,label])=>{
+  const b = document.createElement("button");
+  b.className = "cat-btn"; b.textContent = label; b.dataset.code = code;
+  b.addEventListener("click", ()=>{
+    state.preset = null;
+    state.cats.has(code) ? state.cats.delete(code) : state.cats.add(code);
+    syncControls(); render();
+  });
+  catBtnsEl.appendChild(b);
+});
+
+const sel = document.getElementById("overlapSel");
+[...P].sort((a,b)=>a.name.localeCompare(b.name)).forEach(p=>{
+  const o = document.createElement("option");
+  o.value = p.id; o.textContent = p.name;
+  sel.appendChild(o);
+});
+sel.addEventListener("change", ()=>{
+  state.overlapRef = sel.value === "" ? null : +sel.value;
+  if(state.overlapRef !== null && state.preset){
+    state.preset = null;
+    if(state.cats.size===0) Object.keys(CAT_NAMES).forEach(c=>state.cats.add(c));
+  }
+  syncControls(); render();
+});
+
+document.getElementById("btn-gnh").addEventListener("click", ()=>{
+  state.preset = "gnh"; state.cats.clear(); state.overlapRef = null; sel.value="";
+  syncControls(); render();
+});
+document.getElementById("btn-all").addEventListener("click", ()=>{
+  state.preset = null; state.overlapRef = null; sel.value="";
+  Object.keys(CAT_NAMES).forEach(c=>state.cats.add(c));
+  syncControls(); render();
+});
+document.getElementById("btn-ov").addEventListener("click", ()=>{
+  state.preset = "overview"; state.cats.clear(); state.overlapRef = null; sel.value="";
+  syncControls(); render();
+});
+
+function syncControls(){
+  document.getElementById("btn-gnh").classList.toggle("on", state.preset==="gnh");
+  document.getElementById("btn-ov").classList.toggle("on", state.preset==="overview");
+  const allOn = state.cats.size === Object.keys(CAT_NAMES).length && !state.preset && state.overlapRef===null;
+  document.getElementById("btn-all").classList.toggle("on", allOn);
+  catBtnsEl.querySelectorAll(".cat-btn").forEach(b=>{
+    b.classList.toggle("on", !state.preset && state.cats.has(b.dataset.code));
+  });
+}
+
+/* ============ FILTER ============ */
+function visiblePeople(){
+  let list;
+  if(state.preset === "gnh"){
+    list = P.filter(p => GNH.includes(p.name));
+  } else {
+    list = P.filter(p => p.cats.some(c => state.cats.has(c)));
+    if(state.overlapRef !== null){
+      const ref = P[state.overlapRef];
+      list = list.filter(p => p.b <= endYear(ref) && endYear(p) >= ref.b);
+      if(!list.some(p=>p.id===ref.id)) list.push(ref);  /* always show reference */
+    }
+  }
+  return list.sort((a,b)=> a.b - b.b || endYear(a)-endYear(b));
+}
+
+/* ============ RENDER ============ */
+const scroller = document.getElementById("scroller");
+const inner   = document.getElementById("inner");
+const axisEl  = document.getElementById("axis");
+const rowsEl  = document.getElementById("rows");
+const emptyEl = document.getElementById("empty");
+const countEl = document.getElementById("count");
+const tip     = document.getElementById("tip");
+
+function niceStep(pxPerYear){
+  /* choose tick spacing so ticks are ~90–200px apart */
+  for(const s of [5,10,20,25,50,100,200,250,500]) if(s*pxPerYear >= 90) return s;
+  return 500;
+}
+
+function sizeScroller(){
+  const chromeH = document.getElementById("chrome").offsetHeight;
+  scroller.style.height = (window.innerHeight - chromeH) + "px";
+}
+window.addEventListener("resize", ()=>{ sizeScroller(); render(); });
+
+function renderOverview(){
+  rowsEl.innerHTML = ""; axisEl.innerHTML = "";
+  emptyEl.style.display = "none";
+  countEl.textContent = ERAS.length + " eras";
+
+  /* widths: log10 of duration per era; the prehistory arrow-bar is pinned to
+     ~1.2x a 500-year bar rather than its true (enormous) log width */
+  const viewW = scroller.clientWidth - 2;
+  const logs = ERAS.map(e => e.arrow ? Math.log10(500)*1.2 : Math.log10(e.to - e.from));
+  const sumLog = logs.reduce((a,b)=>a+b,0);
+  const unit = Math.max(48, viewW / sumLog);   /* px per log10-year */
+  const W = Math.ceil(unit * sumLog);
+  inner.style.width = W + "px";
+
+  /* precompute segment left edges */
+  const lefts = [];
+  let cx = 0;
+  ERAS.forEach((e,i)=>{ lefts.push(cx); cx += logs[i]*unit; });
+
+  /* boundary ticks on the sticky axis (era joints, not uniform years) */
+  ERAS.forEach((e,i)=>{
+    const t = document.createElement("div");
+    t.className = "tick major";
+    t.style.left = lefts[i] + "px";
+    t.innerHTML = "<span>"+fmtYear(e.from)+"</span>";
+    axisEl.appendChild(t);
+  });
+  const tEnd = document.createElement("div");
+  tEnd.className = "tick major";
+  tEnd.style.left = (W-1) + "px";
+  tEnd.innerHTML = "<span style='left:auto;right:4px'>"+THIS_YEAR+"</span>";
+  axisEl.appendChild(tEnd);
+
+  const wrap = document.createElement("div");
+  wrap.id = "eras";
+  ERAS.forEach((e,i)=>{
+    const segW = logs[i]*unit;
+    const x = yr => lefts[i] + (yr - e.from) / (e.to - e.from) * segW;
+
+    const bar = document.createElement("div");
+    bar.className = "era" + (e.arrow ? " arrow" : "");
+    bar.style.left  = lefts[i] + "px";
+    bar.style.width = segW + "px";
+    bar.innerHTML = "<span class='era-name'>" + e.name +
+      "<span class='range'>" + fmtYear(e.from) + " \u2013 " + fmtYear(e.to) + "</span></span>";
+    wrap.appendChild(bar);
+
+    const dot = document.createElement("div");
+    dot.className = "dot";
+    dot.style.left = x(e.emblem.mid) + "px";
+    wrap.appendChild(dot);
+
+    const em = document.createElement("div");
+    em.className = "emblem";
+    em.style.left = Math.min(Math.max(x(e.emblem.mid), lefts[i]+segW/2), lefts[i]+segW-4) + "px";
+    em.innerHTML = e.emblem.name + "<span class='yrs2'>" + e.emblem.yrs + "</span>";
+    wrap.appendChild(em);
+
+    [bar,dot,em].forEach(el=>{
+      el.addEventListener("mousemove", ev=>{
+        tip.style.display = "block";
+        tip.innerHTML = "<b>" + e.emblem.name + "</b><br>" + e.emblem.yrs
+          + "<br><span class='dim'>Era: " + e.name + " (" + fmtYear(e.from) + " \u2013 " + fmtYear(e.to) + ")</span>"
+          + "<br><span class='dim'>" + e.emblem.note + "</span>";
+        const w = tip.offsetWidth, h = tip.offsetHeight;
+        let tx = ev.clientX + 14, ty = ev.clientY + 14;
+        if(tx + w > window.innerWidth - 8)  tx = ev.clientX - w - 14;
+        if(ty + h > window.innerHeight - 8) ty = ev.clientY - h - 14;
+        tip.style.left = tx+"px"; tip.style.top = ty+"px";
+      });
+      el.addEventListener("mouseleave", ()=> tip.style.display="none");
+    });
+  });
+  rowsEl.appendChild(wrap);
+}
+
+function render(){
+  if(state.preset === "overview"){ renderOverview(); return; }
+  const list = visiblePeople();
+  rowsEl.innerHTML = ""; axisEl.innerHTML = "";
+  emptyEl.style.display = list.length ? "none" : "block";
+  countEl.textContent = list.length ? list.length + (list.length===1?" person":" people") : "";
+  if(!list.length){ inner.style.width = "100%"; return; }
+
+  let min = Math.min(...list.map(p=>p.b));
+  let max = Math.max(...list.map(p=>endYear(p)));
+  /* left edge gets breathing room; right edge is hard-capped at the
+     last death among visible people (or the present, for living ones) */
+  min -= Math.max(4, Math.round((max-min)*0.03));
+  const span = max - min;
+
+  /* ---- the rescale rule: every label must fit its own bar ---- */
+  const viewW = scroller.clientWidth - 2;
+  let pxPerYear = viewW / span;                       /* start: fit to view */
+  list.forEach(p=>{
+    const yrsSpan = Math.max(1, endYear(p) - p.b);
+    pxPerYear = Math.max(pxPerYear, labelWidth(p) / yrsSpan);
+  });
+  const W = Math.ceil(span * pxPerYear);
+  inner.style.width = W + "px";
+
+  const x = yr => (yr - min) * pxPerYear;
+
+  /* axis + gridlines */
+  const step = niceStep(pxPerYear);
+  const firstTick = Math.ceil(min/step)*step;
+  for(let y=firstTick; y<=max; y+=step){
+    const t = document.createElement("div");
+    t.className = "tick" + (y % (step*2)===0 ? " major":"");
+    t.style.left = x(y) + "px";
+    t.innerHTML = "<span>"+y+"</span>";
+    axisEl.appendChild(t);
+    const g = document.createElement("div");
+    g.className = "gridline" + (y % (step*2)===0 ? " major":"");
+    g.style.left = x(y) + "px";
+    rowsEl.appendChild(g);
+  }
+
+  const ref = state.overlapRef!==null ? P[state.overlapRef] : null;
+
+  list.forEach(p=>{
+    const row = document.createElement("div");
+    row.className = "row" + (ref && p.id===ref.id ? " ref":"");
+    const bar = document.createElement("div");
+    bar.className = "bar" + (p.d===0 ? " living":"");
+    bar.style.left  = x(p.b) + "px";
+    bar.style.width = Math.max(2, x(endYear(p)) - x(p.b)) + "px";
+    const nm = document.createElement("span");
+    const yrs = p.b + "\u2013" + (p.d===0 ? "" : p.d);
+    nm.innerHTML = p.name + "<span class='yrs'>" + yrs + "</span>";
+    nm.className = "name";
+    bar.appendChild(nm);
+    row.appendChild(bar);
+
+    row.addEventListener("mousemove", e=>{
+      tip.style.display = "block";
+      tip.innerHTML = "<b>"+p.name+"</b><br>"
+        + p.b + " \u2013 " + (p.d===0 ? "living" : p.d)
+        + "<br><span class='dim'>" + p.cats.map(c=>CAT_NAMES[c]).join(" / ") + "</span>"
+        + "<br><span class='dim'>" + p.places + "</span>";
+      const w = tip.offsetWidth, h = tip.offsetHeight;
+      let tx = e.clientX + 14, ty = e.clientY + 14;
+      if(tx + w > window.innerWidth - 8)  tx = e.clientX - w - 14;
+      if(ty + h > window.innerHeight - 8) ty = e.clientY - h - 14;
+      tip.style.left = tx+"px"; tip.style.top = ty+"px";
+    });
+    row.addEventListener("mouseleave", ()=> tip.style.display="none");
+    rowsEl.appendChild(row);
+  });
+}
+
+sizeScroller();
+syncControls();
+render();
+</script>
+</body>
+</html>
